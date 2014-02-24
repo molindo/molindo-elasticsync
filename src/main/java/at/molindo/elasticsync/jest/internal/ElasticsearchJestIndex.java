@@ -130,7 +130,11 @@ public class ElasticsearchJestIndex implements ElasticsearchIndex {
 
 		try {
 			JestResult result = client.execute(builder.build());
-			return result.getJsonObject().get("_scroll_id").getAsString();
+			if (result.isSucceeded()) {
+				return result.getJsonObject().get("_scroll_id").getAsString();
+			} else {
+				throw new RuntimeException("failed to start scroll operation: " + result.getJsonObject());
+			}
 		} catch (Exception e) {
 			throw new RuntimeException("failed to start scroll operation", e);
 		}
