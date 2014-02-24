@@ -14,23 +14,22 @@ import at.molindo.elasticsync.api.IdAndVersion;
 
 public class UpdatingVersionStreamVerifierListener implements IdAndVersionStreamVerifierListener {
 
-	private static final Logger log = LoggerFactory
-			.getLogger(UpdatingVersionStreamVerifierListener.class);
-	
+	private static final Logger log = LoggerFactory.getLogger(UpdatingVersionStreamVerifierListener.class);
+
 	private static final int MAX_IN_FLIGHT = 16;
 	private static final int DEFAULT_BATCH_SIZE = 512;
-	
-	private ElasticsearchIndex _sourceIndex;
-	private ElasticsearchIndex _targetIndex;
+
+	private final ElasticsearchIndex _sourceIndex;
+	private final ElasticsearchIndex _targetIndex;
 
 	// access must be synchronized
 	private final List<Document> _load = new ArrayList<>(DEFAULT_BATCH_SIZE);
 	private final List<Document> _index = new ArrayList<>(DEFAULT_BATCH_SIZE);
-	
+
 	private final AtomicInteger _loaded = new AtomicInteger();
 	private final AtomicInteger _indexed = new AtomicInteger();
 	private final AtomicInteger _errors = new AtomicInteger();
-	
+
 	private final Semaphore _sourceInFlight = new Semaphore(MAX_IN_FLIGHT);
 	private final Semaphore _targetInFlight = new Semaphore(MAX_IN_FLIGHT);
 
@@ -55,7 +54,7 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 		}
 		return batch;
 	}
-	
+
 	public UpdatingVersionStreamVerifierListener(ElasticsearchIndex sourceIndex, ElasticsearchIndex targetIndex) {
 		if (sourceIndex == null) {
 			throw new NullPointerException("sourceIndex");
@@ -85,37 +84,37 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 	 * caller must synchronize
 	 */
 	private void loadBatch(final List<Document> load) {
-			
-			try {
-				_sourceInFlight.acquire();
-				_sourceIndex.load(load, new Runnable() {
-					
-					@Override
-					public void run() {
-						int loaded = 0;
-						int errors = 0;
-						try {
-							for(Document doc : load) {
-								if (doc.getSource() != null || doc.isDeleted()) {
-									loaded++;
-									index(doc);
-								} else {
-									errors++;
-									log.warn("document without source ant not deleted: " + doc);
-								}
+
+		try {
+			_sourceInFlight.acquire();
+			_sourceIndex.load(load, new Runnable() {
+
+				@Override
+				public void run() {
+					int loaded = 0;
+					int errors = 0;
+					try {
+						for (Document doc : load) {
+							if (doc.getSource() != null || doc.isDeleted()) {
+								loaded++;
+								index(doc);
+							} else {
+								errors++;
+								log.warn("document without source ant not deleted: " + doc);
 							}
-						} finally {
-							_sourceInFlight.release();
-							_loaded.addAndGet(loaded);
-							_errors.addAndGet(errors);
 						}
+					} finally {
+						_sourceInFlight.release();
+						_loaded.addAndGet(loaded);
+						_errors.addAndGet(errors);
 					}
-				});
-			} catch (InterruptedException e) {
-				throw new RuntimeException(e);
-			}
+				}
+			});
+		} catch (InterruptedException e) {
+			throw new RuntimeException(e);
+		}
 	}
-	
+
 	/**
 	 * caller must synchronize
 	 */
@@ -123,7 +122,7 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 		try {
 			_targetInFlight.acquire();
 			_targetIndex.index(index, new Runnable() {
-				
+
 				@Override
 				public void run() {
 					_targetInFlight.release();
@@ -134,7 +133,7 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 			throw new RuntimeException(e);
 		}
 	}
-	
+
 	@Override
 	public void onMissingInSecondaryStream(String type, IdAndVersion idAndVersion) {
 		load(new Document(type, idAndVersion.getId(), idAndVersion.getVersion()));
@@ -146,9 +145,16 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 	}
 
 	@Override
-	public void onVersionMisMatch(String type, IdAndVersion primaryItem,
-			IdAndVersion secondaryItem) {
-		onMissingInSecondaryStream(type, primaryItem);
+	public void onVersionMisMatch(String type, IdAndVersion primaryItem, IdAndVersion secondaryItem) {
+
+		if (primaryItem.getVersion() < secondaryItem.getVersion()) {
+			if (log.isDebugEnabled()) {
+				log.debug("ignoring version missmatch with lower version: " + primaryItem + " < " + secondaryItem);
+			}
+		} else {
+			onMissingInSecondaryStream(type, primaryItem);
+		}
+
 	}
 
 	@Override
@@ -158,13 +164,13 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 			loadBatch(batch);
 			waitForAll(_sourceInFlight);
 		}
-		
+
 		batch = flush(_index);
 		if (batch != null) {
 			indexBatch(batch);
 			waitForAll(_targetInFlight);
 		}
-		
+
 		log.info("sync finished: loaded {}, indexed {}, errors {}", _loaded, _indexed, _errors);
 	}
 
@@ -177,5 +183,5 @@ public class UpdatingVersionStreamVerifierListener implements IdAndVersionStream
 			throw new RuntimeException(e);
 		}
 	}
-	
+
 }
