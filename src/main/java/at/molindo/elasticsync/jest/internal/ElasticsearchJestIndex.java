@@ -40,7 +40,7 @@ public class ElasticsearchJestIndex implements ElasticsearchIndex {
 
 	private static final List<Doc> EMPTY_DOC_LIST = Collections.emptyList();
 
-	static final int BATCH_SIZE = 100000; // only ids and versions
+	static final int BATCH_SIZE = 10_000; // only ids and versions, per shard
 	static final int SCROLL_TIME_IN_MINUTES = 10;
 
 	private long numItems = 0;
@@ -102,13 +102,27 @@ public class ElasticsearchJestIndex implements ElasticsearchIndex {
 
 		// "hits":{"total":62319,"max_score":0.0,"hits":[{"_index":"stats","_type":"stats","_id":"MostPopularArtists","_version":1392888398281,"_score":0.0,"_source":{"_id":"MostPopularArtists","_ttl":5
 
-		JsonArray hits = searchResponse.getJsonObject().getAsJsonObject("hits").getAsJsonArray("hits");
+		JsonObject obj = searchResponse.getJsonObject().getAsJsonObject("hits");
+
+		long total = obj.get("total").getAsLong();
+
+		JsonArray hits = obj.getAsJsonArray("hits");
+
+		LOG.debug("scroll returned {} of {} total hits", hits.size(), total);
 
 		for (JsonElement e : hits) {
 			JsonObject hit = e.getAsJsonObject();
 
 			String id = hit.get("_id").getAsString();
-			long version = hit.get("_version").getAsLong();
+			JsonElement v = hit.get("_version");
+
+			Long version;
+			if (v == null) {
+				LOG.debug("missing version for id {}", id);
+				version = 1L;
+			} else {
+				version = v.getAsLong();
+			}
 
 			idAndVersionFactory.create(id, version).writeToStream(objectOutputStream);
 			numItems++;
